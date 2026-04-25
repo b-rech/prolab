@@ -26,14 +26,15 @@ plot_path = save_path / 'plots'
 plot_path.mkdir(exist_ok=True, parents=True)
 
 # Save data?
-SAVE_FIGURES = True
-SAVE_DATA =    True
+SAVE_FIGURES = False
+SAVE_DATA =    False
 
 
 # %% Open data
 
 # Absorptance data
 raw_data = pl.read_files(path=data_path,
+                         instrument='wpi',
                          sample_pattern='ponto',
                          ref_pattern='milliq',
                          format_string='{pattern}{id:d}{rep}_{camp}')
@@ -140,4 +141,3 @@ df = params.merge(cdom, left_index=True, right_index=True, how='left')
 
 if SAVE_DATA:
     df.to_csv(save_path / 'merged_data.csv', sep=';')
-

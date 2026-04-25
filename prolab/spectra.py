@@ -53,7 +53,7 @@ class Spectra:
 
         Attributes
         ----------
-        raw_data : pandas.DataFrame
+        rdata : pandas.DataFrame
             Original input dataframe.
         acdom : pandas.DataFrame
             Dataframe containing only spectral absorption values.
@@ -81,7 +81,7 @@ class Spectra:
     # Initializing function
     # -------------------------------------------------------------------------
     def __init__(self, data: 'pd.DataFrame'):
-        """
+        '''
         Initialize a `Spectra` object.
 
         Parameters
@@ -89,25 +89,26 @@ class Spectra:
         data : pd.DataFrame
             A Pandas DataFrame resulting from the
             `prolab.io.read_files` function.
-        """
+        '''
 
+        # ---------------
         # Set atrributes
-        # --------------
+        # ---------------
 
         # Raw data
-        self.raw_data = data
+        self.rdata = data
 
-        # Absorptance curves
-        self.absorptance = self.raw_data.filter(regex='\d')
+        # Spectral curves
+        self.curves = self.rdata.filter(regex='\d')
 
         # Wavelengths
-        self.wls = self.absorptance.columns.map(int).to_numpy()
+        self.wls = self.curves.columns.map(int).to_numpy()
 
         # Update columns to numeric
-        self.absorptance.columns = self.wls
+        self.curves.columns = self.wls
 
         # Columns with metadata
-        meta_cols = data.columns.difference(self.absorptance.columns)
+        meta_cols = data.columns.difference(self.curves.columns)
 
         # Create attributes from metadata
         for col in meta_cols:
@@ -118,71 +119,91 @@ class Spectra:
     # Representation strings
     # -------------------------------------------------------------------------
     def __repr__(self):
-        return (f'Spectra(observations={len(self.absorptance)}, ' +
+        return (f'Spectra(observations={len(self.curves)}, ' +
                 f'wavelengths={len(self.wls)})')
     def __str__(self):
-        return (f'Object Spectra with {len(self.absorptance)} observations and ' +
+        return (f'Object Spectra with {len(self.curves)} observations and ' +
                 f'{len(self.wls)} wavelengths')
 
 
     # -------------------------------------------------------------------------
     # Method: consistency analysis
     # -------------------------------------------------------------------------
-    def consistency(self, std_threshold=.002, include_ref=False,
-                    remove_suspicious=False, plot_suspicious=False,
+    def consistency(self,
+                    std_threshold=.1,
+                    measurements='all',
+                    groupby='id',
+                    remove_suspicious=False,
+                    plot_suspicious=False,
+                    recursive=False,
+                    legend=True,
                     plot_path=None):
-        """
+        '''
         Performs a consistency analysis of the curves.
 
         Parameters
         ----------
         std_threshold : float, optional
             Multiple measurements of the same station that have a standard
-            deviation greater than this values will be marked as suspicious.
-            The default is 0.1.
-        include_ref : bool, optional
-            Whether the reference measurements should be included in the
-            analysis. The default is False.
+            deviation greater than this value at any wavelength will be marked
+            as suspicious. The default is 0.1.
+        measurements : str, optional
+            Use `all` (default) to analyze all curves together, `sample` to
+            analyze only sample curves, or `ref` to analyze only
+            reference curves.
+        groupby : str or list, optional
+            Indicate the attribute or list of attributes to be used for
+            grouping the observations. The default is `id`.
         remove_suspicious : bool, optional
-            Whether the suspicious curves should be removed; if True, a new
-            Spectra object is returned. The default is False.
+            Whether the suspicious curves should be removed; if `True`, a new
+            Spectra object is returned. The default is `False`.
         plot_suspicious : bool, optional
-            Whether to plot the suspicious measurements. The default is False.
+            Whether to plot the groups with suspicious measurements.
+            The default is `False`.
+        recursive : bool, optional
+            When `remove_suspicious=True`, will make the function run again
+            until no suspicious measurements are left, or until a single
+            measurement is left. The default is `False`.
+        legend : bool, optional
+            Whether to insert a legend when `plot_suspicious=True`.
+            The default is `True`.
         plot_path : str, optinal
-            If provided, the plots are saved at the path. The default is None.
+            If provided and if `plot_suspicious=True`, the plots are saved at
+            this folder. The default is `None`.
 
         Notes
         -----
         When `remove_suspicious=True`, each suspicious station' replicate is
         compared with the median curve, and the replicate with the highest
-        absolute difference is removed.It means that only one of the curves is
-        removed.
-
-        It is recommended to run the consistency analysis again after the
-        removal to ensure that the bad measurements have been effectively
-        disregarded.
+        absolute difference is removed. It means that only one of the curves is
+        removed at a time. The option `recursive=True` may be used, but make
+        sure to use a reasonable threshold, otherwise the spectra will be
+        dropped until only a single curve is left.
 
         Returns
         -------
         prolab.Spectra
-            A new `Spectra` object is return if suspicious curves are removed.
-            Otherwise, the same object is return.
-        """
+        '''
 
-        # Include reference measurements in the analysis...
-        if include_ref:
-            data = self.raw_data
-            absorptance = self.absorptance
+        # Analyze only samples...
+        if measurements == 'sample':
+            data = self.rdata.loc[self.is_sample].copy()
 
-        # ...or analyze only sample curves
+        # ... or only references...
+        elif measurements == 'ref':
+            data = self.rdata.loc[self.is_ref].copy()
+
+        # ... or everything together
         else:
-            data = self.raw_data.loc[~self.is_ref]
-            absorptance = self.absorptance.loc[~self.is_ref]
+            data = self.rdata.copy()
 
         # Spectral standard deviation
-        std = data.set_index('id').filter(regex='\d').groupby(level=0).std()
+        std = (data
+               .groupby(groupby)
+               .std(numeric_only=True)
+               .filter(regex='\d'))
 
-        # Std over threshold
+        # Check if any wavelength has std over the threshold
         std_over = (std > std_threshold).sum(axis=1) > 0
 
         # IDs with std over threshold
@@ -191,63 +212,97 @@ class Spectra:
         # If suspicious stations exist
         if len(ids_over) > 0:
 
-            print(f'IDs with std > {std_threshold}:')
-
+            # Iterate over curves
             for s in ids_over:
 
-                print(s)
-
                 # Get suspicious curves
-                suspicious_curves = data.loc[data.id == s].filter(regex='\d')
+                suspicious_curves = (data
+                                     .set_index(groupby)
+                                     .sort_index()
+                                     .loc[s]
+                                     .filter(regex='\d'))
 
                 # Plot them if required
                 if plot_suspicious:
                     fig, ax = plt.subplots(figsize=(5.75, 5.75/2), dpi=300)
-                    suspicious_curves.transpose().plot(legend=True,
+                    suspicious_curves.transpose().plot(legend=legend,
                                                        lw=0.5, ax=ax)
-                    ax.set(xlabel='Wavelength (nm)', ylabel='Absorptance (AU)',
+                    # Labels
+                    ax.set(xlabel='Wavelength (nm)', ylabel='Measurement',
                            title=f'Suspicious curve: ID {s}')
+                    # Grid
                     ax.grid(which='both', lw=.25, color='black')
-                    ax.legend(edgecolor='black', fancybox=False)
+                    # Legend if required
+                    if legend:
+                        ax.legend(edgecolor='black', fancybox=False)
+                    # Config
                     sns.despine()
+                    # Save if required
                     if plot_path:
                         plt.savefig(plot_path / f'suspicious_id_{s}.jpg')
                     plt.show()
 
             # Calculate the median curves of each ID
-            median = (
-                data.groupby('id')
-                .transform('median', numeric_only=True)
-                .filter(regex='\d')
-                )
+            median = (data
+                      .groupby(groupby)
+                      .transform('median', numeric_only=True)
+                      .filter(regex='\d'))
             median.columns = median.columns.map(int)
 
             # Calculate mean absolute deviation (MAD) from the median curve
-            mad = pd.DataFrame(absorptance.sub(median).abs()\
-                               .sum(axis=1).rename('mad'))
+            mad = pd.DataFrame(data
+                               .filter(items=self.wls)
+                               .sub(median)
+                               .abs()
+                               .sum(axis=1)
+                               .rename('mad'))
 
-            # Add IDs
-            mad = mad.join(self.id)
+            # Add info
+            mad = mad.join(data.filter(regex='\D'))
 
             # Keys with highest MAD
-            mad_max = mad.groupby('id').idxmax()
+            mad_max = mad.groupby(groupby).idxmax()
 
-            # Intersection of keys with higher MAD and IDs that are suspicious
+            # Intersection of keys with higher MAD, and IDs that are suspicious
             self.suspicious = mad_max.loc[ids_over].mad.tolist()
 
             # Remove suspicious data
             if remove_suspicious:
-                to_keep = data.index.difference(self.suspicious).tolist()
-                filtered = data.filter(items=to_keep, axis=0)
-                print('Suspicious curves removed')
-                return Spectra(filtered)
+
+                # Drop suspect spectra
+                to_keep = self.rdata.index.difference(self.suspicious)
+                filtered = self.rdata.loc[to_keep]
+
+                # Print keys removed
+                print('--------------------------')
+                print('Suspicious curves removed:')
+                for c in self.suspicious: print(c)
+                print('--------------------------')
+
+                # Create new Spectra object
+                new = Spectra(filtered)
+
+                # Repeat if required
+                if recursive:
+                    return new.consistency(std_threshold, measurements,
+                                           groupby, remove_suspicious,
+                                           plot_suspicious, recursive,
+                                           legend, plot_path)
+
+                # Or just return the new object
+                else:
+                    return new
+
+            # In case suspicious are not to be removed
             else:
                 return self
 
         # If suspicious stations do not exist
         else:
             self.suspicious = None
+            print('--------------------')
             print('No suspicious curves')
+            print('--------------------')
             return self
 
 
@@ -282,7 +337,7 @@ class Spectra:
 
         # Get mean curves
         mean = (
-            self.raw_data.loc[~self.is_ref]
+            self.rdata.loc[~self.is_ref]
             .groupby('id')
             .mean(numeric_only=True)
             .filter(regex='\d')
@@ -411,3 +466,133 @@ class Spectra:
         self.fitted = pd.DataFrame(fit_dict).set_index('id')
 
         return self
+
+    # -------------------------------------------------------------------------
+    # Method: particulate absorption
+    # -------------------------------------------------------------------------
+    def tr(self, unit='percent', wl_offset=800,
+           trans_pattern='T', wl_range=None):
+
+        #--------------
+        # Prepare data
+        #--------------
+
+        # Get data
+        data = self.rdata.set_index('id')
+
+        if unit == 'percent':
+            data[self.wls] /= 100
+
+        # Set filters
+        fref = self.is_ref.to_numpy()
+        fsample = self.is_sample.to_numpy()
+        ftotal = self.is_total.to_numpy()
+        ftrans = (self.config == trans_pattern).to_numpy()
+
+        # Apply the filters to separate data
+        trans_total = data.loc[fsample & ftrans & ftotal].filter(regex='\d')
+        trans_depig = data.loc[fsample & ftrans & ~ftotal].filter(regex='\d')
+        refle_total = data.loc[fsample & ~ftrans & ftotal].filter(regex='\d')
+        refle_depig = data.loc[fsample & ~ftrans & ~ftotal].filter(regex='\d')
+
+        # Get references
+        Tref = data.loc[fref & ftrans].filter(regex='\d').mean()
+        Rref = data.loc[fref & ~ftrans].filter(regex='\d').mean()
+
+        #---------------
+        # Apply offsets
+        #---------------
+
+        # Transmittance cannot exceed the references
+        trans_blank_offset = Tref[wl_offset] - trans_total[wl_offset]
+        trans_blank_offset.loc[trans_blank_offset > 0] = 0
+
+        # Update transmittance
+        trans_total = trans_total.add(trans_blank_offset, axis=0)
+
+        # Total and depigmented curves must match at the reference wavelength
+        trans_offset = trans_total[wl_offset] - trans_depig[wl_offset]
+        refle_offset = refle_total[wl_offset] - refle_depig[wl_offset]
+
+        # Update tables
+        trans_depig = trans_depig.add(trans_offset, axis=0)
+        refle_depig = refle_depig.add(refle_offset, axis=0)
+
+        #-----------------------
+        # Plot of offsetted data
+        #-----------------------
+
+        # Create figure
+        fig, axes = plt.subplots(1, 2, figsize=(5.75, 5.75/3), dpi=300,
+                                 sharey=False, constrained_layout=False)
+
+        # Plot transmittance
+        trans_total.transpose().plot(legend=False, lw=.2,
+                                     color='blue', ax=axes[0])
+        trans_depig.transpose().plot(legend=False, lw=.2,
+                                     color='red', ax=axes[0])
+        Tref.plot(color='black', lw=.5, ax=axes[0])
+
+        # Configure
+        axes[0].set(title='Transmittance')
+
+        # Plot reflectance
+        refle_total.transpose().plot(legend=False, lw=.2,
+                                     color='blue', ax=axes[1])
+        refle_depig.transpose().plot(legend=False, lw=.2,
+                                     color='red', ax=axes[1])
+        Rref.plot(color='black', lw=.5, ax=axes[1])
+
+        # Configure
+        axes[1].set(title='Reflectance')
+        sns.despine()
+
+        #-----------------
+        # Blank correction
+        #-----------------
+
+        # Apply correction (sample/reference)
+        Tt = trans_total.div(Tref, axis=1)
+        Td = trans_depig.div(Tref, axis=1)
+        Rt = refle_total.div(Rref, axis=1)
+        Rd = refle_depig.div(Rref, axis=1)
+
+        #----------------
+        # Tau calculation
+        #----------------
+
+        # Optical depth of transmittance
+        odt_total = np.log10(1 / Tt)
+        odt_depig = np.log10(1 / Td)
+
+        # Quantity used to calculate tau
+        odts_total = odt_total.sub(.5 * odt_total[750], axis=0)
+        odts_depig = odt_depig.sub(.5 * odt_depig[750], axis=0)
+
+        # Correction factor tau
+        tau_total = 1.15 - 0.17 * odts_total
+        tau_total[(odts_total <= .02) | (odts_total >= .7)] = 1
+
+        tau_depig = 1.15 - 0.17 * odts_depig
+        tau_depig[(odts_depig <= .02) | (odts_depig >= .7)] = 1
+
+        #------------------------------------
+        # Correction and absorption retrieval
+        #------------------------------------
+
+        # Calculate absorptances
+        absorptance_total = ((1 - Tt + Rref * (Tt - Rt)) /
+                             (1 + Rref * Tt * tau_total))
+
+        absorptance_depig = ((1 - Td + Rref * (Td - Rd)) /
+                             (1 + Rref * Td * tau_depig))
+
+        # Calculate optical densities
+        od_total = np.log10(1 / (1 - absorptance_total))
+        od_depig = np.log10(1 / (1 - absorptance_depig))
+
+        # Calculate absorption
+        abs_total = np.log(10) * .719 * (od_total ** 1.2287)
+        abs_depig = np.log(10) * .719 * (od_depig ** 1.2287)
+
+        return abs_total, abs_depig
