@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 '''
-Script: io.py
-Description: functions to read and write data.
+Script: spectra.py
+Description: Spectra class and associated methods.
 Author: Bruno Rech
 Institution: INPE
 Created: 2026-03-12
@@ -191,7 +191,7 @@ class Spectra:
 
         # ... or only references...
         elif measurements == 'ref':
-            data = self.rdata.loc[self.is_ref].copy()
+            data = self.rdata.loc[self.is_blank].copy()
 
         # ... or everything together
         else:
@@ -309,82 +309,108 @@ class Spectra:
     # -------------------------------------------------------------------------
     # Method: retrieve absorption
     # -------------------------------------------------------------------------
-    def get_absortion(self, reference=None, wl_to_offset=600, pathlength=.1):
-        """
-        Retrieve absorption from absorptance curves.
+    def get_absorption(self,
+                       use_blank=True,
+                       blank=None,
+                       wl_null_point_correction=600,
+                       pathlength=.1):
+        '''
+        Retrieve absorption from absorbance curves.
 
         Parameters
         ----------
-        reference : pd.DataFrame, optional
-            If `None`, the reference measurements within the data will be used.
+        use_ref : bool, optional
+            Indicates whether the data must be corrected using reference
+            (blank). The default is `True`.
+        ref : pd.DataFrame, optional
+            Only used when `use_ref=True`. If `None`, the reference
+            measurements within the data will be used.
             If a single curve is provided (wavelengths in the columns),
-            the same curve will be used to correct all measurements.
+            it will be used to correct all measurements.
             If multiple curves are provided (salinity curves), the algorithm
             will select that closer to the sample at 685 nm, following the
-            IOCCG protocol. The default is None.
+            IOCCG protocol. The default is `None`.
         wl_to_offset : int, optional
             The absorption at this wavelength will be subtracted from the whole
-            absorption spectrum. The default is 600.
+            absorption spectrum. The default is `600`.
         pathlength : float, optional
-            The instrument optical path length in meters. The default is .1.
+            The instrument optical path length in meters. The default is `.1`.
 
         Returns
         -------
         prolab.Spectra
             The same object is returned.
             A new attribute `absorption` is added inplace.
-        """
+        '''
 
-        # Get mean curves
-        mean = (
-            self.rdata.loc[~self.is_ref]
-            .groupby('id')
-            .mean(numeric_only=True)
-            .filter(regex='\d')
-            )
-        mean.columns = mean.columns.map(int)
+        #-----------------------
+        # Prepare data and blank
+        #-----------------------
 
-        # In case a reference is provided
-        if reference is not None:
-            blank = reference
-            blank.columns = blank.columns.map(int)
-        # Otherwise, use those from the data
-        else:
-            blank = (self.absorptance.loc[self.is_ref]
-                     .median()
-                     .rename('ref')
+        # If the available blank curves are to be used
+        if use_blank and blank is None:
+            # Get mean reference curves
+            blank = (self
+                     .absorbance
+                     .loc[self.is_blank]
+                     .mean()
+                     .rename('blank')
                      .to_frame()
-                     .transpose()
-                     )
+                     .transpose())
+
+        # If a blank curve (or curves) is provided
+        elif use_blank and blank is not None:
+            # Prepare the curve(s)
+            blank.columns = blank.columns.map(int)
+
+        # In case no blank is to be used (i.e., curves already corrected)
+        else:
+            blank = pd.DataFrame({wl: 0 for wl in self.wls}, index=['blank'])
+
 
         # Min and max wavelengths available
         wlmin = max(self.wls.min(), blank.columns.min())
         wlmax = min(self.wls.max(), blank.columns.max())
         wl_range = range(wlmin, wlmax + 1)
 
+        # Get mean sample curves
+        # (grouped by id in case of multiple measurements)
+        mean = (self
+                .rdata
+                .loc[self.is_sample]
+                .groupby('id')
+                .mean(numeric_only=True)
+                .filter(regex='\d'))
+        mean.columns = mean.columns.map(int)
+
         # Filter wavelengths
-        self.mean_absorptance = mean[wl_range]
+        self.raw_absorbance = mean[wl_range]
         blank = blank[wl_range]
+
+        #----------------------
+        # Correction with blank
+        #----------------------
 
         # For single blank curves
         if len(blank) == 1:
-            self.absorptance_corr = self.mean_absorptance.sub(blank.squeeze(),
-                                                              axis=1)
+            self.absorbance = self.raw_absorbance.sub(blank.squeeze(), axis=1)
 
         # For multiple blank curves
+        # It was designed to account for salinity curves, and the selection
+        # is performed by minimizing the difference at 685 nm
         else:
             # Dictionary to receive corrected curves
             corr_dict = {}
 
             # Dictionaries to save reference curves and their names
-            ref_dict = {}
-            ref_sal_dict = {}
+            blank_dict = {}
+            blank_sal_dict = {}
 
             # Iterate over curves
-            for st, curve in self.mean_absorptance.iterrows():
+            for st, curve in self.raw_absorbance.iterrows():
 
                 # Select a reference curve
-                ref_sel = (
+                blank_sel = (
                     abs(blank.loc[:, 685:].sub(curve.loc[685:], axis=1))
                     .mean(axis=1)
                     .sort_values()
@@ -392,26 +418,58 @@ class Spectra:
                     )
 
                 # Subtract selected reference
-                corr_dict[st] = (curve - blank.loc[ref_sel])
+                corr_dict[st] = (curve - blank.loc[blank_sel])
 
                 # Save the selected reference curve
-                ref_dict[st] = blank.loc[ref_sel]
-                ref_sal_dict[st] = ref_sel
+                blank_dict[st] = blank.loc[blank_sel]
+                blank_sal_dict[st] = blank_sel
 
             # Corrected data
-            self.absorptance_corr = pd.DataFrame(corr_dict).transpose()
+            self.absorbance = pd.DataFrame(corr_dict).transpose()
 
             # Reference used
-            self.ref_curves = pd.DataFrame(ref_dict).transpose()
-            self.ref_salinity = pd.DataFrame(ref_sal_dict, index=[0])
+            self.blank_curves = pd.DataFrame(blank_dict).transpose()
+            self.blank_salinity = pd.DataFrame(blank_sal_dict, index=[0])
 
-        # Apply offset
-        absorptance_off = self.absorptance_corr.sub(
-            self.absorptance_corr[wl_to_offset], axis=0
-            )
+        #----------------------
+        # Null point correction
+        #----------------------
+
+        _check = True
+
+        # Single wavelength
+        if isinstance(wl_null_point_correction, (int, float)):
+
+            # Null point correction offsets
+            self.npc_offset = self.absorbance[wl_null_point_correction]
+            absorbance_off = self.absorbance.sub(self.npc_offset , axis=0)
+
+        # Mean within an interval
+        elif isinstance(wl_null_point_correction, (list, tuple, np.ndarray)):
+
+            # Initial and final wavelengths
+            wli, wlf = wl_null_point_correction
+
+            # Offsets
+            self.npc_offset = self.absorbance.loc[:, wli:wlf].mean(axis=1)
+            absorbance_off = self.absorbance.sub(self.npc_offset , axis=0)
+
+        # No correction
+        elif wl_null_point_correction is None:
+            absorbance_off = self.absorbance
+            _check = False
+
+        else:
+            raise ValueError('Set a proper parameter to '
+                             +'wl_null_point_correction')
+
+        # Check according to IOCCG recommendation
+        if _check and any(self.npc_offset > .0015):
+            print('WARNING: there are offsets > 0.0015 AU in the null ' +
+                  'point correction')
 
         # Calculate absorption
-        self.absorption = 2.3 * absorptance_off / pathlength
+        self.absorption = 2.3 * absorbance_off / pathlength
 
         return self
 
@@ -444,12 +502,17 @@ class Spectra:
         # Initial guesses for abs_ref and slope
         init_guess = (0.1, 0.02)
 
-        # Linearlize parameters
-        ydata = self.absorption.loc[:, range(wl_range[0], wl_range[1])]
-        x= ydata.columns.map(int).to_numpy()
+        # Curves to be fitted (y)
+        if isinstance(wl_range, (list, tuple, np.ndarray)):
+            ydata = self.absorption.loc[:, range(wl_range[0], wl_range[1])]
+        else:
+            ydata = self.absorption
+
+        # Wavelengths (x)
+        x = ydata.columns.map(int).to_numpy()
 
         # Dictionary to store data
-        fit_dict = {'id': [], f'acdom{wl_ref:.0f}': [], 'slope': []}
+        fit_dict = {'id': [], f'a{wl_ref:.0f}': [], 'slope': []}
 
         # Fit coefficients
         for st, y in ydata.iterrows():
@@ -459,7 +522,7 @@ class Spectra:
 
             # Store data
             fit_dict['id'].append(st)
-            fit_dict[f'acdom{wl_ref:.0f}'].append(coeffs[0])
+            fit_dict[f'a{wl_ref:.0f}'].append(coeffs[0])
             fit_dict['slope'].append(coeffs[1])
 
         # Final dataframe
@@ -470,34 +533,89 @@ class Spectra:
     # -------------------------------------------------------------------------
     # Method: particulate absorption
     # -------------------------------------------------------------------------
-    def tr(self, unit='percent', wl_offset=800,
-           trans_pattern='T', wl_range=None):
+    def part_absorption(self, vol_diameter, unit='percentual',
+                        instrument='shimadzu', wl_offset=800,
+                        use_tau=True, trans_pattern='T', wl_range=None,
+                        plot_raw=False, plot_absorbance=False):
+        '''
+        Retrieves particulate absorption based on the
+        transmittance-reflectance method (Tassan & Ferrari, 1995).
+
+        Parameters
+        ----------
+        unit : str, optional
+            Indicates whether the measurements of transmittance and reflectance
+            are in `decimal` (e.g., 0.20) or `percentual` form.
+            The default is 'percentual'.
+        wl_offset : int, optional
+            At this wavelength, the transmittance of the sample is ensured to
+            be lower than or equal to the transmittance of the reference.
+            Also, at this wavelength the total and depigmented curves of a
+            given sample are supposed to be equal, and depigmented spectra may
+            be offset to ensure that. The default is 800.
+        use_tau : bool, optional
+            Indicates if the factor tau should be used in the calculation of
+            the absorbance. The default is `True`.
+        trans_pattern : str, optional
+            The pattern (within the attribute `rmode`) used to identify
+            transmittance spectra. The default is `T`.
+        wl_range : array-like, optional
+            If provided, the calculation are limited to this interval. Make
+            sure that it includes the wavelength set in `wl_offset`.
+            The default is None.
+        plot_raw : bool, optional
+            Whether to plot the raw curves after offset correction.
+            The default is `False`.
+        plot_absorbance : bool, optional
+            Whether to plot the absorbance curves. The default is `False`.
+
+        Returns
+        -------
+        abs_total : TYPE
+            DESCRIPTION.
+        abs_depig : TYPE
+            DESCRIPTION.
+        '''
 
         #--------------
         # Prepare data
         #--------------
 
         # Get data
-        data = self.rdata.set_index('id')
+        wls = self.wls
+        if instrument == 'perkinelmer':
+            rdata = self.rdata.set_index('id').filter(regex='\d')
+            data = np.power(10, -rdata)
 
-        if unit == 'percent':
-            data[self.wls] /= 100
+
+        # Get filtered volume and filter clearance area
+        # vol = vol_diameter.volume
+        # area = np.pi * (vol_diameter.diameter **2) / 4
+
+        # Curtail wavelength range
+        if wl_range is not None:
+            data = data.loc[:, wl_range[0]:wl_range[1]]
+            wls = np.arange(wl_range[0], wl_range[1] + 1)
+
+        # Get relative values if necessary
+        if unit == 'percentual':
+            data[wls] /= 100
 
         # Set filters
-        fref = self.is_ref.to_numpy()
+        fref = self.is_blank.to_numpy()
         fsample = self.is_sample.to_numpy()
         ftotal = self.is_total.to_numpy()
-        ftrans = (self.config == trans_pattern).to_numpy()
+        ftrans = (self.rmode == trans_pattern).to_numpy()
 
         # Apply the filters to separate data
-        trans_total = data.loc[fsample & ftrans & ftotal].filter(regex='\d')
-        trans_depig = data.loc[fsample & ftrans & ~ftotal].filter(regex='\d')
-        refle_total = data.loc[fsample & ~ftrans & ftotal].filter(regex='\d')
-        refle_depig = data.loc[fsample & ~ftrans & ~ftotal].filter(regex='\d')
+        trans_total = data.loc[fsample & ftrans & ftotal]
+        trans_depig = data.loc[fsample & ftrans & ~ftotal]
+        refle_total = data.loc[fsample & ~ftrans & ftotal]
+        refle_depig = data.loc[fsample & ~ftrans & ~ftotal]
 
         # Get references
-        Tref = data.loc[fref & ftrans].filter(regex='\d').mean()
-        Rref = data.loc[fref & ~ftrans].filter(regex='\d').mean()
+        Tref = data.loc[fref & ftrans].median()
+        Rref = data.loc[fref & ~ftrans].median()
 
         #---------------
         # Apply offsets
@@ -518,81 +636,107 @@ class Spectra:
         trans_depig = trans_depig.add(trans_offset, axis=0)
         refle_depig = refle_depig.add(refle_offset, axis=0)
 
-        #-----------------------
-        # Plot of offsetted data
-        #-----------------------
+        #-----------------
+        # Plot offset data
+        #-----------------
 
-        # Create figure
-        fig, axes = plt.subplots(1, 2, figsize=(5.75, 5.75/3), dpi=300,
-                                 sharey=False, constrained_layout=False)
+        if plot_raw:
+            # Create figure
+            fig, axes = plt.subplots(1, 2, figsize=(5.75, 5.75/3), dpi=300,
+                                     sharey=False, constrained_layout=False)
 
-        # Plot transmittance
-        trans_total.transpose().plot(legend=False, lw=.2,
-                                     color='blue', ax=axes[0])
-        trans_depig.transpose().plot(legend=False, lw=.2,
-                                     color='red', ax=axes[0])
-        Tref.plot(color='black', lw=.5, ax=axes[0])
+            # Plot transmittance
+            trans_total.transpose().plot(legend=False, lw=.2,
+                                         color='blue', ax=axes[0])
+            trans_depig.transpose().plot(legend=False, lw=.2,
+                                         color='red', ax=axes[0])
+            Tref.plot(color='black', lw=.5, ax=axes[0])
 
-        # Configure
-        axes[0].set(title='Transmittance')
+            # Configure
+            axes[0].set(title='Transmittance')
 
-        # Plot reflectance
-        refle_total.transpose().plot(legend=False, lw=.2,
-                                     color='blue', ax=axes[1])
-        refle_depig.transpose().plot(legend=False, lw=.2,
-                                     color='red', ax=axes[1])
-        Rref.plot(color='black', lw=.5, ax=axes[1])
+            # Plot reflectance
+            refle_total.transpose().plot(legend=False, lw=.2,
+                                         color='blue', ax=axes[1])
+            refle_depig.transpose().plot(legend=False, lw=.2,
+                                         color='red', ax=axes[1])
+            Rref.plot(color='black', lw=.5, ax=axes[1])
 
-        # Configure
-        axes[1].set(title='Reflectance')
-        sns.despine()
+            # Configure
+            axes[1].set(title='Reflectance')
+            sns.despine()
+            plt.show()
 
         #-----------------
         # Blank correction
         #-----------------
 
         # Apply correction (sample/reference)
-        Tt = trans_total.div(Tref, axis=1)
-        Td = trans_depig.div(Tref, axis=1)
-        Rt = refle_total.div(Rref, axis=1)
-        Rd = refle_depig.div(Rref, axis=1)
+        Tt = trans_total.div(Tref, axis=1).copy()
+        Td = trans_depig.div(Tref, axis=1).copy()
+        Rt = refle_total.div(Rref, axis=1).copy()
+        Rd = refle_depig.div(Rref, axis=1).copy()
 
         #----------------
         # Tau calculation
         #----------------
 
-        # Optical depth of transmittance
-        odt_total = np.log10(1 / Tt)
-        odt_depig = np.log10(1 / Td)
+        if use_tau:
+            # Optical depth of transmittance
+            odt_total = np.log10(1 / Tt)
+            odt_depig = np.log10(1 / Td)
 
-        # Quantity used to calculate tau
-        odts_total = odt_total.sub(.5 * odt_total[750], axis=0)
-        odts_depig = odt_depig.sub(.5 * odt_depig[750], axis=0)
+            # Quantity used to calculate tau
+            odts_total = odt_total.sub(.5 * odt_total[750], axis=0)
+            odts_depig = odt_depig.sub(.5 * odt_depig[750], axis=0)
 
-        # Correction factor tau
-        tau_total = 1.15 - 0.17 * odts_total
-        tau_total[(odts_total <= .02) | (odts_total >= .7)] = 1
+            # Correction factor tau
+            tau_total = 1.15 - 0.17 * odts_total
+            tau_total[(odts_total <= .02) | (odts_total >= .7)] = 1
 
-        tau_depig = 1.15 - 0.17 * odts_depig
-        tau_depig[(odts_depig <= .02) | (odts_depig >= .7)] = 1
+            tau_depig = 1.15 - 0.17 * odts_depig
+            tau_depig[(odts_depig <= .02) | (odts_depig >= .7)] = 1
+
+        else:
+            tau_total = 1
+            tau_depig = 1
 
         #------------------------------------
         # Correction and absorption retrieval
         #------------------------------------
 
-        # Calculate absorptances
-        absorptance_total = ((1 - Tt + Rref * (Tt - Rt)) /
+        # Calculate absorbances
+        absorbance_total = ((1 - Tt + Rref * (Tt - Rt)) /
                              (1 + Rref * Tt * tau_total))
 
-        absorptance_depig = ((1 - Td + Rref * (Td - Rd)) /
+        absorbance_depig = ((1 - Td + Rref * (Td - Rd)) /
                              (1 + Rref * Td * tau_depig))
 
-        # Calculate optical densities
-        od_total = np.log10(1 / (1 - absorptance_total))
-        od_depig = np.log10(1 / (1 - absorptance_depig))
+        if plot_absorbance:
+            # Create figure
+            fig, axes = plt.subplots(1, 2, figsize=(5.75, 5.75/3), dpi=300,
+                                     sharey=False, constrained_layout=False)
 
-        # Calculate absorption
-        abs_total = np.log(10) * .719 * (od_total ** 1.2287)
-        abs_depig = np.log(10) * .719 * (od_depig ** 1.2287)
+            # Plot total
+            absorbance_total.transpose().plot(legend=False, lw=.2,
+                                               color='blue', ax=axes[0])
+            # Configure
+            axes[0].set(title='Total')
+
+            # Plot depigmented
+            absorbance_depig.transpose().plot(legend=False, lw=.2,
+                                               color='blue', ax=axes[1])
+            # Configure
+            axes[1].set(title='Depigmented')
+            sns.despine()
+            plt.show()
+
+        # Calculate optical densities
+        od_total = np.log10(1 / (1 - absorbance_total))
+        od_depig = np.log10(1 / (1 - absorbance_depig))
+
+        # # Calculate absorption
+        abs_total = np.log(10) * .719 * (od_total ** 1.2287) #/ (vol / area)
+        abs_depig = np.log(10) * .719 * (od_depig ** 1.2287) #/ (vol / area)
 
         return abs_total, abs_depig
