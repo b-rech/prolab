@@ -27,7 +27,8 @@ from parse import parse
 # %% Function to read files
 
 def read_files(path, instrument, format_string, sample_pattern,
-               blank_pattern, decimal='.', force_unique=False):
+               blank_pattern, trans_pattern, depig_pattern=None,
+               decimal='.', force_unique=False):
     '''
     Read files from WPI measurements (all files in a directory).
 
@@ -38,7 +39,7 @@ def read_files(path, instrument, format_string, sample_pattern,
     instrument : str
         Name of the instrument that generated the files.
 
-        Supported instruments: `wpi` and `shimadzu`.
+        Supported instruments: `perkin-elmer`, `shimadzu` and `wpi`.
 
     format_string : str
         A parsing pattern string (template) used to extract information
@@ -109,6 +110,7 @@ def read_files(path, instrument, format_string, sample_pattern,
 
         # Create dataframe
         curves = pd.DataFrame(curve_dict).transpose()
+        curves.columns = curves.columns.map(int)
 
     # -------------------------------------------------------------------------
     # Specific processing of Shimadzu data
@@ -145,7 +147,7 @@ def read_files(path, instrument, format_string, sample_pattern,
     # -------------------------------------------------------------------------
     # Specific processing of Perkin-Elmer data
     # -------------------------------------------------------------------------
-    if instrument == 'perkinelmer':
+    if instrument == 'perkin-elmer':
 
         # Create dict to receive curves
         curve_dict = {}
@@ -169,6 +171,7 @@ def read_files(path, instrument, format_string, sample_pattern,
 
         # Create dataframe
         curves = pd.DataFrame(curve_dict).transpose()
+        curves.columns = curves.columns.map(int)
 
     # -------------------------------------------------------------------------
     # Further processing of data
@@ -191,8 +194,27 @@ def read_files(path, instrument, format_string, sample_pattern,
     meta = pd.DataFrame(parsed.tolist(), index=curves.index)
 
     # Create column to identify sample and blank measurements
-    meta['is_blank'] = [blank_pattern in name for name in meta.index]
-    meta['is_sample'] = [sample_pattern in name for name in meta.index]
+    meta['is_blank'] = [blank_pattern.lower()
+                        in name.lower()
+                        for name
+                        in meta.pattern]
+    meta['is_sample'] = [sample_pattern.lower()
+                         in name.lower()
+                         for name
+                         in meta.pattern]
+
+    # Create column to identify transmittance and reflectance
+    meta['is_trans'] = [trans_pattern.lower()
+                        in name.lower()
+                        for name
+                        in meta.rmode]
+
+    # In case of particulate absorption data with total and depigmented curves
+    if depig_pattern is not None:
+        meta['is_total'] = [depig_pattern.lower()
+                             not in name.lower()
+                             for name
+                             in meta.rtype]
 
     # Final dataframe
     df = meta.merge(curves, left_index=True, right_index=True)

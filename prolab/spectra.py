@@ -69,7 +69,7 @@ class Spectra:
         >>> from prolab import Spectra
         >>> spec = Spectra(data)
         >>> spec.expfit()
-        >>> spec.fit_df
+        >>> spec.fitted
 
         Notes
         -----
@@ -106,6 +106,9 @@ class Spectra:
 
         # Update columns to numeric
         self.curves.columns = self.wls
+
+        # Sampling stations
+        self.stations = data.id[data.is_sample].unique().tolist()
 
         # Columns with metadata
         meta_cols = data.columns.difference(self.curves.columns)
@@ -315,24 +318,35 @@ class Spectra:
                        wl_null_point_correction=600,
                        pathlength=.1):
         '''
-        Retrieve absorption from absorbance curves.
+        Retrieves absorption from absorbance curves.
 
         Parameters
         ----------
-        use_ref : bool, optional
-            Indicates whether the data must be corrected using reference
-            (blank). The default is `True`.
-        ref : pd.DataFrame, optional
-            Only used when `use_ref=True`. If `None`, the reference
-            measurements within the data will be used.
+
+        use_blank : bool, optional
+            Indicates whether the data must be corrected using a blank.
+            The default is `True`.
+
+        blank : pd.DataFrame, optional
+            Only used when `use_blank=True`.
+            If `None`, the mean blank measurements
+            within the data will be used.
             If a single curve is provided (wavelengths in the columns),
-            it will be used to correct all measurements.
+            it will be used in all measurements.
             If multiple curves are provided (salinity curves), the algorithm
-            will select that closer to the sample at 685 nm, following the
-            IOCCG protocol. The default is `None`.
-        wl_to_offset : int, optional
-            The absorption at this wavelength will be subtracted from the whole
-            absorption spectrum. The default is `600`.
+            will select the blank closer to the sample at 685 nm, 
+            following the IOCCG protocol.
+            The default is `None`.
+
+        wl_null_point_correction : int or array-like, optional
+            Wavelength to be used at the null point correction (offset).
+            If an integer is passed, the absorption at this wavelength will
+            be used.
+            If a tuple with the limits of a spectral interval is
+            provided, the mean absorption within the range will be used.
+            If `None`, the null point correction won't be executed.
+            The default is `None`.
+
         pathlength : float, optional
             The instrument optical path length in meters. The default is `.1`.
 
@@ -533,10 +547,15 @@ class Spectra:
     # -------------------------------------------------------------------------
     # Method: particulate absorption
     # -------------------------------------------------------------------------
-    def part_absorption(self, vol_diameter, unit='percentual',
-                        instrument='shimadzu', wl_offset=800,
-                        use_tau=True, trans_pattern='T', wl_range=None,
-                        plot_raw=False, plot_absorbance=False):
+    def part_absorption(self,
+                        vol_diameter,
+                        unit='absorbance',
+                        wl_offset=800,
+                        use_tau=True,
+                        trans_pattern='T',
+                        wl_range=None,
+                        plot_raw=False,
+                        plot_absorbance=False):
         '''
         Retrieves particulate absorption based on the
         transmittance-reflectance method (Tassan & Ferrari, 1995).
@@ -581,12 +600,16 @@ class Spectra:
         # Prepare data
         #--------------
 
-        # Get data
+        # Wavelengths
         wls = self.wls
-        if instrument == 'perkinelmer':
-            rdata = self.rdata.set_index('id').filter(regex='\d')
-            data = np.power(10, -rdata)
 
+        # Get data
+        if unit == 'absorbance':
+            rdata = self.rdata.set_index('id').filter(regex='\d')
+            # Convert to transmittance/reflectance
+            data = np.power(10, -rdata)
+        elif unit == 'percentual':
+            data[wls] /= 100
 
         # Get filtered volume and filter clearance area
         # vol = vol_diameter.volume
@@ -596,10 +619,6 @@ class Spectra:
         if wl_range is not None:
             data = data.loc[:, wl_range[0]:wl_range[1]]
             wls = np.arange(wl_range[0], wl_range[1] + 1)
-
-        # Get relative values if necessary
-        if unit == 'percentual':
-            data[wls] /= 100
 
         # Set filters
         fref = self.is_blank.to_numpy()
@@ -614,15 +633,17 @@ class Spectra:
         refle_depig = data.loc[fsample & ~ftrans & ~ftotal]
 
         # Get references
-        Tref = data.loc[fref & ftrans].median()
-        Rref = data.loc[fref & ~ftrans].median()
+        Tblk_total = data.loc[fref & ftrans & ftotal].median()
+        Rblk_total = data.loc[fref & ~ftrans & ftotal].median()
+        Tblk_depig = data.loc[fref & ftrans & ~ftotal].median()
+        Rblk_depig = data.loc[fref & ~ftrans & ~ftotal].median()
 
         #---------------
         # Apply offsets
         #---------------
 
-        # Transmittance cannot exceed the references
-        trans_blank_offset = Tref[wl_offset] - trans_total[wl_offset]
+        # Transmittance cannot exceed the blanks
+        trans_blank_offset = Tblk_total[wl_offset] - trans_total[wl_offset]
         trans_blank_offset.loc[trans_blank_offset > 0] = 0
 
         # Update transmittance
@@ -641,41 +662,72 @@ class Spectra:
         #-----------------
 
         if plot_raw:
-            # Create figure
-            fig, axes = plt.subplots(1, 2, figsize=(5.75, 5.75/3), dpi=300,
-                                     sharey=False, constrained_layout=False)
 
-            # Plot transmittance
-            trans_total.transpose().plot(legend=False, lw=.2,
-                                         color='blue', ax=axes[0])
-            trans_depig.transpose().plot(legend=False, lw=.2,
-                                         color='red', ax=axes[0])
-            Tref.plot(color='black', lw=.5, ax=axes[0])
+            # Long data
+            plot_data = self.rdata.melt(
+                id_vars=self.rdata.filter(regex='\D').columns.tolist()
+                )
+            plot_data['variable'] = plot_data.variable.map(int)
+            plot_data['is_total'] = plot_data.is_total.replace(
+                {True: 'Total', False: 'Extracted'})
+            plot_data['is_trans'] = plot_data.is_trans.replace(
+                {True: 'Transmittance', False: 'Reflectance'})
 
-            # Configure
-            axes[0].set(title='Transmittance')
+            # Styling
+            hue_pal = {'Transmittance': 'r', 'Reflectance': 'b'}
+            style_pal = {'Total': (None, None), 'Extracted': (3, 1)}
 
-            # Plot reflectance
-            refle_total.transpose().plot(legend=False, lw=.2,
-                                         color='blue', ax=axes[1])
-            refle_depig.transpose().plot(legend=False, lw=.2,
-                                         color='red', ax=axes[1])
-            Rref.plot(color='black', lw=.5, ax=axes[1])
+            # Iterate over stations
+            for st in self.stations:
 
-            # Configure
-            axes[1].set(title='Reflectance')
-            sns.despine()
-            plt.show()
+                # Create figure
+                fig, ax = plt.subplots(figsize=(5.75, 5.75), dpi=100)
+
+                # Get data
+                _dt = plot_data.loc[(plot_data.id == st)]
+
+                # Plot sample curves
+                sns.lineplot(data=_dt, x='variable', y='value',
+                             palette=hue_pal,
+                             style='is_total',
+                             style_order=['Total', 'Extracted'],
+                             dashes=style_pal,
+                             hue='is_trans',
+                             hue_order=['Transmittance', 'Reflectance'],
+                             ax=ax)
+
+                # Plot blanks
+                sns.lineplot(Tblk_total.transpose(), color='r', alpha=.5)
+                sns.lineplot(Tblk_depig.transpose(), color='r', alpha=.5,
+                             ls='dashed')
+                sns.lineplot(Rblk_total.transpose(), color='b', alpha=.5)
+                sns.lineplot(Rblk_depig.transpose(), color='b', alpha=.5,
+                             ls='dashed')
+
+                # Pega handles e labels
+                handles, labels = ax.get_legend_handles_labels()
+                
+                # Cria legenda sem título
+                ax.legend([handles[i] for i in [1, 2, 4, 5]],
+                          [labels[i] for i in [1, 2, 4, 5]],
+                          fontsize=8, ncols=2)
+
+                # Config
+                ax.set(title=st, xlabel='Wavelength (nm)',
+                       ylabel='Transmittance | Reflectance')
+                sns.despine()
+                plt.show()
+
 
         #-----------------
         # Blank correction
         #-----------------
 
         # Apply correction (sample/reference)
-        Tt = trans_total.div(Tref, axis=1).copy()
-        Td = trans_depig.div(Tref, axis=1).copy()
-        Rt = refle_total.div(Rref, axis=1).copy()
-        Rd = refle_depig.div(Rref, axis=1).copy()
+        Tt = trans_total.div(Tblk_total, axis=1).copy()
+        Td = trans_depig.div(Tblk_depig, axis=1).copy()
+        Rt = refle_total.div(Rblk_total, axis=1).copy()
+        Rd = refle_depig.div(Rblk_depig, axis=1).copy()
 
         #----------------
         # Tau calculation
@@ -706,11 +758,11 @@ class Spectra:
         #------------------------------------
 
         # Calculate absorbances
-        absorbance_total = ((1 - Tt + Rref * (Tt - Rt)) /
-                             (1 + Rref * Tt * tau_total))
+        absorbance_total = ((1 - Tt + Rblk_total * (Tt - Rt)) /
+                             (1 + Rblk_total * Tt * tau_total))
 
-        absorbance_depig = ((1 - Td + Rref * (Td - Rd)) /
-                             (1 + Rref * Td * tau_depig))
+        absorbance_depig = ((1 - Td + Rblk_depig * (Td - Rd)) /
+                             (1 + Rblk_depig * Td * tau_depig))
 
         if plot_absorbance:
             # Create figure
