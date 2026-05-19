@@ -1,0 +1,10 @@
+[project]
+name = "prolab"
+version = "0.1.0"
+description = "Processing of ocean color laboratory measurements"
+authors = [{ name="Bruno Rech", email="b.rech@outlook.com" }]
+readme = "README.md"
+requires-python = ">=3.11"
+
+[tool.setuptools.packages.find]
+where = ["."]

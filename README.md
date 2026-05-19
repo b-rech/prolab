@@ -4,9 +4,53 @@ Processing of ocean color laboratory measurements.
 
 ## 🚀 Instalation
 
-Soon.
+In the Anaconda prompt, clone the repository:
 
-## 🔧Key Features
+```bash
+git clone git@github.com:b-rech/prolab.git
+```
+
+Then, go to the folder and create a new Conda environment with the required dependencies:
+
+```bash
+cd prolab
+conda env create -f environment.yml
+conda activate prolab
+```
+
+Finally, you can install the module:
+
+```bash
+pip install .
+```
+
+Alternatively, install directly from GitHub, but make sure to have all dependencies installed:
+
+```bash
+pip install git+https://github.com/your-username/prolab.git
+```
+
+## Using Jupyter with the `prolab` environment
+
+To run notebooks inside the `prolab` conda environment, run in your Anaconda prompt:
+
+```bash
+conda activate prolab
+conda install ipykernel 
+python -m ipykernel install --user --name prolab --display-name "Python (prolab)"
+```
+
+Then start Jupyter:
+
+```bash
+jupyter lab
+```
+
+In Jupyter, select the kernel `Python (prolab)` from the Kernel menu to ensure the notebook runs in the correct environment.
+
+
+
+## Key Features
 
 The module allows the processing of:
 

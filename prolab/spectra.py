@@ -3,18 +3,8 @@
 Script: spectra.py
 Description: Spectra class and associated methods.
 Author: Bruno Rech
-Institution: INPE
 Created: 2026-03-12
 Python version: 3.11
-
-Dependencies:
-    - matplotlib
-    - numpy
-    - pandas
-    - scipy
-
-Usage:
-    python example.py
 '''
 
 # %% Dependencies
@@ -35,21 +25,11 @@ class Spectra:
 
         Parameters
         ----------
+
         data : pandas.DataFrame
             Input dataframe containing spectral measurements and metadata.
             Spectral wavelengths must be provided as column names
             (e.g., 450, 451, ...).
-
-        id_attr : str
-            The name of the column in `data` that will be used to identify the
-            different measurements, e.g., station ID or salinity value.
-
-        station_pattern : str
-            A string used to filter sample measurements (e.g., `'point'`).
-
-        reference_pattern : str
-            A string used to filter reference measurements (e.g., `'milliq'`).
-            Use `None` if no reference measurements are provided.
 
         Attributes
         ----------
@@ -68,8 +48,10 @@ class Spectra:
         --------
         >>> from prolab import Spectra
         >>> spec = Spectra(data)
-        >>> spec.expfit()
-        >>> spec.fitted
+# %%
+
+# %%
+
 
         Notes
         -----
@@ -357,12 +339,13 @@ class Spectra:
             A new attribute `absorption` is added inplace.
         '''
 
-        #-----------------------
+        #------------------------
         # Prepare data and blank
-        #-----------------------
+        #------------------------
 
-        # If the available blank curves are to be used
+        # If the blank curves from the dataset are to be used
         if use_blank and blank is None:
+
             # Get mean reference curves
             blank = (self
                      .absorbance
@@ -374,6 +357,7 @@ class Spectra:
 
         # If a blank curve (or curves) is provided
         elif use_blank and blank is not None:
+
             # Prepare the curve(s)
             blank.columns = blank.columns.map(int)
 
@@ -381,14 +365,13 @@ class Spectra:
         else:
             blank = pd.DataFrame({wl: 0 for wl in self.wls}, index=['blank'])
 
-
         # Min and max wavelengths available
         wlmin = max(self.wls.min(), blank.columns.min())
         wlmax = min(self.wls.max(), blank.columns.max())
         wl_range = range(wlmin, wlmax + 1)
 
         # Get mean sample curves
-        # (grouped by id in case of multiple measurements)
+        # They're grouped by id in case of multiple measurements
         mean = (self
                 .rdata
                 .loc[self.is_sample]
@@ -401,9 +384,9 @@ class Spectra:
         self.raw_absorbance = mean[wl_range]
         blank = blank[wl_range]
 
-        #----------------------
+        #-----------------------
         # Correction with blank
-        #----------------------
+        #-----------------------
 
         # For single blank curves
         if len(blank) == 1:
@@ -413,6 +396,9 @@ class Spectra:
         # It was designed to account for salinity curves, and the selection
         # is performed by minimizing the difference at 685 nm
         else:
+
+            print('The correction will use the salinity curves provided')
+
             # Dictionary to receive corrected curves
             corr_dict = {}
 
@@ -445,9 +431,9 @@ class Spectra:
             self.blank_curves = pd.DataFrame(blank_dict).transpose()
             self.blank_salinity = pd.DataFrame(blank_sal_dict, index=[0])
 
-        #----------------------
+        #-----------------------
         # Null point correction
-        #----------------------
+        #-----------------------
 
         _check = True
 
@@ -474,8 +460,8 @@ class Spectra:
             _check = False
 
         else:
-            raise ValueError('Set a proper parameter to '
-                             +'wl_null_point_correction')
+            raise ValueError('Set a proper value to '
+                             +'"wl_null_point_correction"')
 
         # Check according to IOCCG recommendation
         if _check and any(self.npc_offset > .0015):
@@ -483,7 +469,7 @@ class Spectra:
                   'point correction')
 
         # Calculate absorption
-        self.absorption = 2.3 * absorbance_off / pathlength
+        self.absorption = 2.303 * absorbance_off / pathlength
 
         return self
 
@@ -492,13 +478,15 @@ class Spectra:
     # Method: fit exponential curve
     # -------------------------------------------------------------------------
     def expfit(self, wl_ref=443, wl_range=(350, 500)):
-        """
-        Fits exponential curves.
+        '''
+        Fits exponential-decaying curves.
 
         Parameters
         ----------
+
         wl_ref : int, optional
             Wavelength of reference for the fitting. The default is 443.
+
         wl_range : tuple, optional
             Limits of the wavelength range to be used in the curve fitting.
             The default is (350, 500).
@@ -508,7 +496,8 @@ class Spectra:
         prolab.Spectra
             The same object is returned.
             A new attribute `fitted` is added inplace.
-        """
+        '''
+
         # Exponential curve to fit
         def exp_curve(wl, abs_ref, slope):
             return abs_ref * np.exp(-slope * (wl - wl_ref))
@@ -531,7 +520,7 @@ class Spectra:
         # Fit coefficients
         for st, y in ydata.iterrows():
 
-            # Fit curve
+            # Fit curve (least squares)
             coeffs, _ = scipy.optimize.curve_fit(exp_curve, x, y, init_guess)
 
             # Store data
