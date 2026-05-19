@@ -132,26 +132,33 @@ class Spectra:
             Multiple measurements of the same station that have a standard
             deviation greater than this value at any wavelength will be marked
             as suspicious. The default is 0.1.
+
         measurements : str, optional
             Use `all` (default) to analyze all curves together, `sample` to
             analyze only sample curves, or `ref` to analyze only
             reference curves.
+
         groupby : str or list, optional
             Indicate the attribute or list of attributes to be used for
             grouping the observations. The default is `id`.
+
         remove_suspicious : bool, optional
             Whether the suspicious curves should be removed; if `True`, a new
             Spectra object is returned. The default is `False`.
+
         plot_suspicious : bool, optional
             Whether to plot the groups with suspicious measurements.
             The default is `False`.
+
         recursive : bool, optional
             When `remove_suspicious=True`, will make the function run again
             until no suspicious measurements are left, or until a single
             measurement is left. The default is `False`.
+
         legend : bool, optional
             Whether to insert a legend when `plot_suspicious=True`.
             The default is `True`.
+
         plot_path : str, optinal
             If provided and if `plot_suspicious=True`, the plots are saved at
             this folder. The default is `None`.
@@ -202,14 +209,14 @@ class Spectra:
 
                 # Get suspicious curves
                 suspicious_curves = (data
-                                     .set_index(groupby)
+                                     .loc[data.id == s]
+                                     .set_index('rep')
                                      .sort_index()
-                                     .loc[s]
                                      .filter(regex='\d'))
 
                 # Plot them if required
                 if plot_suspicious:
-                    fig, ax = plt.subplots(figsize=(5.75, 5.75/2), dpi=300)
+                    fig, ax = plt.subplots(figsize=(5.75, 5.75/2), dpi=200)
                     suspicious_curves.transpose().plot(legend=legend,
                                                        lw=0.5, ax=ax)
                     # Labels

@@ -30,27 +30,27 @@ Alternatively, install directly from GitHub, but make sure to have all dependenc
 pip install git+https://github.com/your-username/prolab.git
 ```
 
-## Using Jupyter with the `prolab` environment
+## 🕸️ Using Jupyter and Spyder
 
-To run notebooks inside the `prolab` conda environment, run in your Anaconda prompt:
+To run notebooks inside the `prolab` conda environment, make sure that you have installed Jupyter:
 
 ```bash
 conda activate prolab
-conda install ipykernel 
-python -m ipykernel install --user --name prolab --display-name "Python (prolab)"
+conda install -c conda-forge jupyterlab
 ```
 
-Then start Jupyter:
+To open it, activate the environment and run the command `jupyter lab`.
+
+If you want to run the `.py` scripts, we recommend using Spyder, that can be installed with:
 
 ```bash
-jupyter lab
+conda activate prolab
+conda install -c conda-forge spyder
 ```
 
-In Jupyter, select the kernel `Python (prolab)` from the Kernel menu to ensure the notebook runs in the correct environment.
+Activate the environment and use the command `spyder` to open it.
 
-
-
-## Key Features
+## ⚙️ Key Features
 
 The module allows the processing of:
 
@@ -71,3 +71,5 @@ The processing of CDOM absorption measurements follows the specific [IOCCG proto
 ## 👤Credits
 
 Developed and mantained by [Bruno Rech](https://github.com/b-rech).
+
+

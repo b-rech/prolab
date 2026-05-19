@@ -27,8 +27,8 @@ from parse import parse
 # %% Function to read files
 
 def read_files(path, instrument, format_string, sample_pattern,
-               blank_pattern, trans_pattern, depig_pattern=None,
-               decimal='.', force_unique=False):
+               blank_pattern=None, trans_pattern=None,
+               depig_pattern=None, decimal='.'):
     '''
     Read files from WPI measurements (all files in a directory).
 
@@ -196,18 +196,23 @@ def read_files(path, instrument, format_string, sample_pattern,
     # Create column to identify sample and blank measurements
     meta['is_blank'] = [blank_pattern.lower()
                         in name.lower()
+                        if blank_pattern
+                        is not None
+                        else False
                         for name
                         in meta.pattern]
+
     meta['is_sample'] = [sample_pattern.lower()
                          in name.lower()
                          for name
                          in meta.pattern]
 
-    # Create column to identify transmittance and reflectance
-    meta['is_trans'] = [trans_pattern.lower()
-                        in name.lower()
-                        for name
-                        in meta.rmode]
+    if trans_pattern is not None:
+        # Create column to identify transmittance and reflectance
+        meta['is_trans'] = [trans_pattern.lower()
+                            in name.lower()
+                            for name
+                            in meta.rmode]
 
     # In case of particulate absorption data with total and depigmented curves
     if depig_pattern is not None:
