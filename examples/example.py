@@ -7,19 +7,20 @@ Institution: INPE/CEBIMar
 Created: 2026-03-12
 """
 
-# %% Dependencies
+# %% Dependencies -------------------------------------------------------------
 
 # Libraries
 import pandas as pd
 from pathlib import Path
 import seaborn as sns
 from matplotlib import pyplot as plt
+import numpy as np
 
 # Special modules
 import prolab as pl
 
 # Path to data
-data_path = Path('data/WPI/05mar2026')
+data_path = Path('data/TR_20260506')
 save_path = Path('data/processed')
 save_path.mkdir(exist_ok=True, parents=True)
 plot_path = save_path / 'plots'
@@ -30,18 +31,118 @@ SAVE_FIGURES = False
 SAVE_DATA =    False
 
 
-# %% Open data
+# %% Create a master blank ----------------------------------------------------
 
-# Absorptance data
-raw_data = pl.read_files(path=data_path,
-                         instrument='wpi',
-                         sample_pattern='ponto',
-                         ref_pattern='milliq',
-                         format_string='{pattern}{id:d}{rep}_{camp}')
+# Folder with all blanks
+path_blanks = Path('data/blanks_perkinelmer')
+
+# Read blanks
+raw_blanks = pl.read_files(
+    path=path_blanks,
+    instrument='perkin-elmer',
+    sample_pattern='AMO',
+    blank_pattern='REF',
+    trans_pattern='T',
+    depig_pattern='EXT',
+    format_string='{camp}_{pattern}_{id}_{rmode}_{rtype}'
+    )
+
+raw_blanks = raw_blanks.filter(regex='^\d')
+raw_blanks_n = raw_blanks.div(raw_blanks.mean(axis=1), axis=0)
+
+ddx = abs(np.gradient(raw_blanks_n.filter(regex='^\d').to_numpy(), axis=1))
+
+ddx = pd.DataFrame(ddx, columns=raw_blanks.filter(regex='^\d').columns)
+
+ddx_melted = ddx.melt()
+
+ddx.T.plot(legend=False)
 
 # Plot raw curves
 _, ax = plt.subplots(figsize=(5.75, 5.75/2), dpi=300)
-raw_data[~raw_data.is_ref]\
+raw_blanks\
+    .transpose()\
+    .plot(legend=False, lw=.3, color='black', ax=ax)
+ax.set(xlabel='Wavelength (nm)', ylabel='Absorptance (AU)',
+       title='All measurements (with replicates)')
+ax.grid(which='both', lw=.25, color='black')
+sns.despine()
+
+
+
+# %% Break correction ---------------------------------------------------------
+
+# Breaks in the spectra
+breaks = [422, 558, 685, 795]
+
+brange = np.arange(breaks[0]-4, breaks[0]+5, 1)
+
+for i in raw_blanks.index:
+    deviation = raw_blanks_n.loc[i][brange].std()
+    if deviation > 0.005:
+        #sns.lineplot(raw_blanks.loc[i], lw=1, color='black')
+
+        # Select data
+        upper = raw_blanks.loc[i][brange][1:]
+        lower = raw_blanks.loc[i][brange][:-1]
+
+        # Calculate difference
+        diff = abs(upper.to_numpy() - lower.to_numpy())
+        diff_idx = np.argmax(diff)
+        upper_wl = upper.index[diff_idx]
+        lower_wl = lower.index[diff_idx]
+
+        corrected = raw_blanks.loc[i].copy()
+        corrected = corrected.where(corrected.index < upper_wl, corrected + diff[diff_idx])
+
+        sns.lineplot(corrected, lw=1, color='black')
+        plt.xlim((415, 430))
+
+
+# %% Open data ----------------------------------------------------------------
+
+# Absorptance data
+raw_data = pl.read_files(
+    path=data_path,
+    instrument='perkin-elmer',
+    sample_pattern='AMO',
+    blank_pattern='REF',
+    trans_pattern='T',
+    depig_pattern='EXT',
+    format_string='{camp}_{pattern}_{id:d}_{rmode}_{rtype}'
+    )
+
+# Table with filtered volumes
+volume_data = pd.read_csv('data/TR_VOLUMES_20260506.csv', sep=';')
+
+# Create spectra object
+spectra = pl.Spectra(raw_data)
+
+from scipy.signal import savgol_filter
+
+for st in spectra.curves.index:
+
+    _, ax = plt.subplots(figsize=(5.75, 5.75/2), dpi=300)
+    ax2 = ax.twinx()
+
+    test = pd.DataFrame(spectra.curves.loc[st])
+    test = test.div(test.mean())
+
+    ddx2 = pd.DataFrame(np.gradient(np.gradient(np.gradient(test.T.to_numpy()[0]))))
+    ddx2 = pd.DataFrame(ddx2.div(ddx2.abs().sum())).abs()
+    ddx2.set_index(test.index, inplace=True)
+    ddx2.plot(ax=ax, color='r', lw=.3)
+
+    test.plot(ax=ax2, color='black', lw=1)
+    plt.xlim((415, 425))
+    plt.show()
+
+
+# %% Plot all curves together -------------------------------------------------
+
+# Plot raw curves
+_, ax = plt.subplots(figsize=(5.75, 5.75/2), dpi=300)
+raw_data[~raw_data.is_blank]\
     .set_index('id')\
     .filter(regex='^\d')\
     .transpose()\
@@ -50,27 +151,48 @@ ax.set(xlabel='Wavelength (nm)', ylabel='Absorptance (AU)',
        title='All measurements (with replicates)')
 ax.grid(which='both', lw=.25, color='black')
 sns.despine()
+
+# Save if required
 if SAVE_FIGURES:
     plt.savefig(plot_path / f'{data_path.stem}_all_measurements.png')
 plt.show()
 
-# Salinity curve to use as reference
-salinity = pd.read_csv('data/sal_curve_interpolated_202604.csv',
-                       sep=';', index_col=0)
 
-# Create object
-spectra = pl.Spectra(data=raw_data)
+# %% Plot blanks --------------------------------------------------------------
 
-# Check consistency
-spectra.consistency(std_threshold=.005, plot_suspicious=True)
+# Plot raw curves
+_, ax = plt.subplots(figsize=(5.75, 5.75/2), dpi=300)
+raw_data[raw_data.is_blank]\
+    .filter(regex='^\d')\
+    .transpose()\
+    .plot(legend=True, lw=1, ax=ax)
+ax.set(xlabel='Wavelength (nm)', ylabel='Absorptance (AU)',
+       title='All measurements (with replicates)')
+ax.grid(which='both', lw=.25, color='black')
+sns.despine()
+
+# Save if required
+if SAVE_FIGURES:
+    plt.savefig(plot_path / f'{data_path.stem}_all_measurements.png')
+plt.show()
 
 
-# %% Remove suspicious
+# %% Consistency check --------------------------------------------------------
 
-# In case you want to remove suspicious curve, run the consistency analysis
-# again with remove_suspicious=True
-spectra = spectra.consistency(std_threshold=.005, remove_suspicious=True)
-spectra.consistency(std_threshold=.005, plot_suspicious=True)
+# Only possible when there are replicates.
+
+
+# %% Get absorption
+
+spectra.part_absorption(vol_diameter=None,
+                        unit='absorbance',
+                        wl_offset=800,
+                        use_tau=True,
+                        trans_pattern='T',
+                        wl_range=None,
+                        plot_raw=True,
+                        plot_absorbance=True)
+
 
 
 #%% Spectra correction

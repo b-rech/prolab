@@ -1,9 +1,3 @@
-'''
-ProLab
-------
-Processing of ocean color laboratory measurements.
-'''
-
 from .spectra import Spectra
 from .io import read_files
 
