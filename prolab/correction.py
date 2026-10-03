@@ -1,4 +1,14 @@
-"""Spectral correction methods."""
+"""
+Module: correction.py
+Purpose: Correct spectral breaks in absorbance measurements.
+Author: Bruno Rech
+Institution: INPE
+Created: 2026-03-12
+Python: 3.11+
+
+Dependencies: numpy, pandas, matplotlib, seaborn
+Public API: BreakMethods.treat_breaks
+"""
 
 import numpy as np
 import pandas as pd
@@ -210,7 +220,11 @@ class BreakMethods:
         import matplotlib
 
         if not inline and matplotlib.get_backend().lower() != 'qtagg':
-            matplotlib.use('QtAgg', force=True)
+            try:
+                matplotlib.use('QtAgg', force=True)
+            except ImportError:
+                # Keep the configured backend when Qt bindings are unavailable.
+                pass
 
         import matplotlib.pyplot as plt
         return plt

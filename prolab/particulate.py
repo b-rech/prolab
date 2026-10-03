@@ -37,7 +37,9 @@ class ParticulateProcessor:
                        trans_pattern='T',
                        wl_range=None,
                        plot_raw=False,
-                       plot_absorbance=False):
+                       plot_absorbance=False,
+                       split_total_depig_blank=True,
+                       custom_blanks=None):
         '''
         Retrieve particulate absorption from TR measurements.
 
@@ -54,10 +56,20 @@ class ParticulateProcessor:
             Wavelength used to align and offset the curves.
         use_tau : bool, optional
             Whether to apply the tau correction.
+        split_total_depig_blank : bool, optional
+            Whether to calculate separate total and depigmented blank means.
+            If ``False``, all blanks for each measurement mode are combined
+            into one mean and used for both correction paths.
         wl_range : tuple or None, optional
             Inclusive wavelength interval to process.
         plot_raw, plot_absorbance : bool, optional
             Whether to display intermediate diagnostic plots.
+        custom_blanks : pandas.DataFrame or None, optional
+            Optional blank measurements to use instead of blanks in the data. It must
+            be provided in the same ``type_measurement``.
+            The index must contain exactly one ``T`` row and one ``R`` row,
+            and the columns must be wavelength labels. When provided,
+            ``split_total_depig_blank`` must be ``False``.
 
         Returns
         -------
@@ -95,16 +107,79 @@ class ParticulateProcessor:
         ftotal = spectra.is_total.to_numpy()
         ftrans = (spectra.rmode == trans_pattern).to_numpy()
 
+        # Validate and prepare externally supplied blank measurements.
+        custom_blank_data = None
+        if custom_blanks is not None:
+            if split_total_depig_blank:
+                raise ValueError(
+                    'split_total_depig_blank must be False when '
+                    'custom_blanks is provided.')
+            if not isinstance(custom_blanks, pd.DataFrame):
+                raise TypeError('custom_blanks must be a pandas DataFrame.')
+            if custom_blanks.empty:
+                raise ValueError('custom_blanks must not be empty.')
+
+            blank_modes = pd.Index(custom_blanks.index).map(
+                lambda mode: str(mode).upper())
+            if not blank_modes.isin(['T', 'R']).all():
+                raise ValueError(
+                    'custom_blanks index must contain only T and R labels.')
+            if (blank_modes == 'T').sum() != 1 or (blank_modes == 'R').sum() != 1:
+                raise ValueError(
+                    'custom_blanks must contain exactly one T row and one R row.')
+
+            custom_blank_data = custom_blanks.copy()
+            try:
+                numeric_wavelengths = np.asarray(
+                    [float(wavelength) for wavelength in custom_blank_data.columns],
+                    dtype=float)
+                if not np.equal(numeric_wavelengths,
+                                numeric_wavelengths.astype(int)).all():
+                    raise ValueError
+                custom_blank_data.columns = pd.Index(
+                    numeric_wavelengths.astype(int), dtype='int64')
+            except (TypeError, ValueError, OverflowError) as error:
+                raise ValueError(
+                    'custom_blanks columns must be integer wavelengths.') from error
+
+            missing_wavelengths = wls.difference(custom_blank_data.columns)
+            if not missing_wavelengths.empty:
+                raise ValueError(
+                    'custom_blanks is missing wavelengths: '
+                    f'{missing_wavelengths.tolist()}')
+            custom_blank_data = custom_blank_data.loc[:, wls]
+            custom_blank_data.index = blank_modes
+            custom_blank_data = custom_blank_data.apply(pd.to_numeric,
+                                                        errors='coerce')
+            if custom_blank_data.isna().any().any():
+                raise ValueError(
+                    'custom_blanks must contain only numeric measurements.')
+            if type_measurement == 'absorbance':
+                custom_blank_data = np.power(10, -custom_blank_data)
+            if percentual:
+                custom_blank_data /= 100
+
         trans_total_raw = data.loc[fsample & ftrans & ftotal].sort_index()
         refl_total_raw = data.loc[fsample & ~ftrans & ftotal].sort_index()
         trans_depig_raw = data.loc[fsample & ftrans & ~ftotal].sort_index()
         refl_depig_raw = data.loc[fsample & ~ftrans & ~ftotal].sort_index()
 
         # Calculate the blank reference curves used for correction.
-        Tblank_total = data.loc[fblank & ftrans & ftotal].mean()
-        Rblank_total = data.loc[fblank & ~ftrans & ftotal].mean()
-        Tblank_depig = data.loc[fblank & ftrans & ~ftotal].mean()
-        Rblank_depig = data.loc[fblank & ~ftrans & ~ftotal].mean()
+        if custom_blank_data is not None:
+            Tblank_total = custom_blank_data.loc['T']
+            Rblank_total = custom_blank_data.loc['R']
+            Tblank_depig = Tblank_total.copy()
+            Rblank_depig = Rblank_total.copy()
+        elif split_total_depig_blank:
+            Tblank_total = data.loc[fblank & ftrans & ftotal].mean()
+            Rblank_total = data.loc[fblank & ~ftrans & ftotal].mean()
+            Tblank_depig = data.loc[fblank & ftrans & ~ftotal].mean()
+            Rblank_depig = data.loc[fblank & ~ftrans & ~ftotal].mean()
+        else:
+            Tblank_total = data.loc[fblank & ftrans].mean()
+            Rblank_total = data.loc[fblank & ~ftrans].mean()
+            Tblank_depig = Tblank_total.copy()
+            Rblank_depig = Rblank_total.copy()
 
         # Reuse the available blank type when only one pigmentation class is
         # present in the reference measurements.
@@ -130,19 +205,26 @@ class ParticulateProcessor:
         if wl_offset not in wls:
             raise ValueError('wl_offset out of bounds.')
 
-        # Ensure that total transmittance is not higher than the blank
-        trans_blank_offset = trans_total_raw[wl_offset] - Tblank_total[wl_offset]
-        trans_blank_offset.loc[trans_blank_offset < 0] = 0
+        # Ensure that total transmittance is not higher than the blank at any
+        # wavelength by applying each sample's greatest positive difference.
+        trans_blank_offset = (trans_total_raw.sub(Tblank_total, axis=1)
+                              .max(axis=1)
+                              .clip(lower=0))
         trans_total = trans_total_raw.sub(trans_blank_offset, axis=0)
 
-        # Ensure that depigmented transmittance equals total at the reference wavelength
-        # Note: need to use the transmittance already corrected with blank offset
+        # Ensure that total reflectance is not higher than the blank at any
+        # wavelength by applying each sample's greatest positive difference.
+        refl_blank_offset = (refl_total_raw.sub(Rblank_total, axis=1)
+                             .max(axis=1)
+                             .clip(lower=0))
+        refl_total = refl_total_raw.sub(refl_blank_offset, axis=0)
+
+        # Ensure that depigmented curves equal total ones at the reference wavelength
         trans_offset = trans_depig_raw[wl_offset] - trans_total[wl_offset].to_numpy()
         trans_depig = trans_depig_raw.sub(trans_offset, axis=0)
 
-        refl_offset = refl_depig_raw[wl_offset] - refl_total_raw[wl_offset].to_numpy()
+        refl_offset = refl_depig_raw[wl_offset] - refl_total[wl_offset].to_numpy()
         refl_depig = refl_depig_raw.sub(refl_offset, axis=0)
-        refl_total = refl_total_raw.copy()
 
         # Plot raw and offset curves if requested
         if plot_raw:
@@ -183,6 +265,8 @@ class ParticulateProcessor:
                             (1 + Rblank_total * Tt * tau_total))
         absorbance_depig = ((1 - Td + Rblank_depig * (Td - Rd)) /
                             (1 + Rblank_depig * Td * tau_depig))
+        absorbance_total = absorbance_total.fillna(0).clip(lower=0)
+        absorbance_depig = absorbance_depig.fillna(0).clip(lower=0)
 
         spectra.absorbance_total = absorbance_total
         spectra.absorbance_depig = absorbance_depig
@@ -208,7 +292,7 @@ class ParticulateProcessor:
             if dimensions[['volume', 'diameter']].isna().any().any():
                 raise ValueError(
                     'vol_diameter must have volume and diameter values for '
-                    'every sample index.')
+                    'every sample id.')
             volume = pd.to_numeric(dimensions['volume'], errors='coerce')
             diameter = pd.to_numeric(dimensions['diameter'], errors='coerce')
             normalization = np.pi * diameter ** 2 / (4 * volume)

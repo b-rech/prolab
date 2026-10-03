@@ -1,26 +1,16 @@
-# -*- coding: utf-8 -*-
 '''
-Script: spectra.py
-Description: Shared spectral data container and processor composition.
+Module: spectra.py
+Purpose: Shared spectral data container and processor composition.
 Author: Bruno Rech
 Institution: INPE
 Created: 2026-03-12
-Python version: 3.11
+Python: 3.11+
 
-Dependencies:
-    - pandas
-    - prolab.cdom
-    - prolab.consistency
-    - prolab.particulate
+Dependencies: pandas, prolab.cdom, prolab.consistency, prolab.correction,
+prolab.particulate
 
-Public API:
-    - Spectra
-    - spectra.cdom.get_absorption()
-    - spectra.particulate.get_absorption()
-    - spectra.consistency.check()
-
-Usage:
-    python example.py
+Public API: Spectra, spectra.cdom.get_absorption(),
+spectra.particulate.get_absorption(), spectra.consistency.check()
 '''
 
 # %% Dependencies
@@ -47,16 +37,25 @@ class Spectra:
             Table containing an ``id`` column, metadata, and wavelength
             columns whose names contain numeric values.
         """
-        # Keep the input table and identify numeric wavelength columns.
-        self.raw_data = data
-        self.raw_spectra = self.raw_data.filter(regex='\d')
-        self.wls = self.raw_spectra.columns.map(int).to_numpy()
-        self.raw_spectra.columns = self.wls
+        # Keep an independent table and normalize wavelength column names.
+        self.raw_data = data.copy()
+        wavelength_columns = self.raw_data.filter(regex=r'\d').columns
+        wavelength_values = pd.Index(
+            wavelength_columns.map(float).map(int),
+            dtype='int64',
+        )
+        self.raw_data.rename(
+            columns=dict(zip(wavelength_columns, wavelength_values)),
+            inplace=True,
+        )
+        self.raw_spectra = self.raw_data[wavelength_values]
+        self.raw_spectra.columns = wavelength_values
+        self.wls = wavelength_values.to_numpy()
 
         # Expose metadata columns as attributes used by the processors.
-        meta_cols = data.columns.difference(self.raw_spectra.columns)
+        meta_cols = self.raw_data.columns.difference(self.raw_spectra.columns)
         for col in meta_cols:
-            setattr(self, col, data[col])
+            setattr(self, col, self.raw_data[col])
 
         # Domain-specific processors operate on this shared object.
         self.cdom = CDOMProcessor(self)

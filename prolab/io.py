@@ -1,24 +1,18 @@
-# -*- coding: utf-8 -*-
 '''
-Script: io.py
-Description: Input functions for laboratory spectral measurements.
+Module: io.py
+Purpose: Read laboratory spectral measurement files.
 Author: Bruno Rech
 Institution: INPE
 Created: 2026-03-12
-Python version: 3.11
+Python: 3.11+
 
-Dependencies:
-    - pandas
-    - parse
+Dependencies: pandas, parse
 
-Public API:
-    - read_files()
+Public API: read_files
 '''
-
 
 # %% Dependencies
 
-# Libraries
 from pathlib import Path
 import pandas as pd
 from parse import parse
