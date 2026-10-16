@@ -59,7 +59,7 @@ def plot_part_absorption_raw(
     ]).drop_duplicates()
 
     for sample_id in sample_ids:
-        _, axes = plt.subplots(1, 2, figsize=(6, 4), dpi=300,
+        _, axes = plt.subplots(1, 2, figsize=(5.75, 3), dpi=200,
                                sharey=False, constrained_layout=True)
 
         raw_plot_curves = (

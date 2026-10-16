@@ -37,7 +37,6 @@ class ParticulateProcessor:
                        trans_pattern='T',
                        wl_range=None,
                        plot_raw=False,
-                       plot_absorbance=False,
                        split_total_depig_blank=True,
                        custom_blanks=None):
         '''
@@ -62,7 +61,7 @@ class ParticulateProcessor:
             into one mean and used for both correction paths.
         wl_range : tuple or None, optional
             Inclusive wavelength interval to process.
-        plot_raw, plot_absorbance : bool, optional
+        plot_raw : bool, optional
             Whether to display intermediate diagnostic plots.
         custom_blanks : pandas.DataFrame or None, optional
             Optional blank measurements to use instead of blanks in the data. It must
@@ -270,10 +269,6 @@ class ParticulateProcessor:
 
         spectra.absorbance_total = absorbance_total
         spectra.absorbance_depig = absorbance_depig
-
-        if plot_absorbance:
-            plot_part_absorption_absorbance(
-                absorbance_total, absorbance_depig, spectra.id)
 
         # Convert absorbance to optical density before the volume and area correction
         od_total = np.log10(1 / (1 - absorbance_total))

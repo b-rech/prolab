@@ -18,7 +18,7 @@ import pandas as pd
 from parse import parse
 
 
-# %% Function to read files
+# %% Function to read files ------------------------------------------------------------
 
 def read_files(path,
                instrument,
@@ -28,45 +28,58 @@ def read_files(path,
                depig_pattern=None,
                decimal='.'):
     '''
-    Read files from spectrophotometric measurements.
+    Read and combine spectrophotometric measurement files.
 
     Parameters
     ----------
-    path : str
-        Path to the folder where the files are located. Must include only
-        the files to be read.
+    path : str or pathlib.Path
+        Directory containing the measurement files. The directory must contain
+        only files from the dataset to be read.
 
     instrument : str
-        Name of the instrument that generated the files.
-        The supported instruments are: `wpi`, 'perkinelmer', and `shimadzu`.
+        Instrument that generated the files. Supported values are ``'wpi'``,
+        ``'perkinelmer'``, and ``'shimadzu'``.
 
     format_string : str
-        A parsing pattern string (template) used to extract information
-        from file names (or columns when using a single file).
-        It must contain at least `pattern` and `id` strings.
+        ``parse``-compatible template used to extract metadata from each file
+        name. It must contain the fields ``pattern`` and ``id``.
 
-        For example: `{pattern}_{id}_{replicate}_{campaign}`
+        For example, ``'{pattern}_{id}_{replicate}_{campaign}'`` parses a
+        filename such as ``'station_01_a_c01'`` into named fields.
 
-        - `pattern`  : informs whether it's sample or blank (mandatory)
-        - `id`       : integer identifier (mandatory)
-        - `replicate`: replicate label (optional)
-        - `campaign` : campaign name (optional)
-
-        It would be used to deal with filenames such as `'station_01_a_c01'`.
-
-        Read the documentation of the `parse` module for further details.
+        See the ``parse`` package documentation for template syntax.
 
     sample_pattern : str
-        String used as pattern to identify sample measurements.
+        Value of the parsed ``pattern`` field used to identify sample
+        measurements.
 
     blank_pattern : str
-        String used as pattern to identify blank measurements.
+        Value of the parsed ``pattern`` field used to identify blank
+        measurements.
+
+    depig_pattern : str, optional
+        Substring used to classify depigmented measurements. When provided,
+        the returned DataFrame includes ``is_depig`` and ``is_total`` columns.
+
+    decimal : str, default='.'
+        Decimal separator used when reading the measurement files.
 
     Returns
     -------
-    pd.DataFrame
-        A Pandas DataFrame indexed by the file names. The columns present the
-        variables parsed from the filename, and the wavelengths.
+    pandas.DataFrame
+        DataFrame indexed by ``key``. It contains the metadata parsed from
+        each filename, the boolean columns ``is_blank`` and ``is_sample``,
+        optional depigmentation flags, and one column per wavelength.
+
+    Raises
+    ------
+    FileNotFoundError
+        If ``path`` does not exist.
+    NotADirectoryError
+        If ``path`` is not a directory.
+    ValueError
+        If the instrument is unsupported, the format is missing ``pattern``
+        or ``id``, or a filename cannot be parsed.
     '''
 
     # -------------------------------------------------------------------------

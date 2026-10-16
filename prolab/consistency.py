@@ -39,7 +39,8 @@ class ConsistencyProcessor:
             recursive=False,
             legend=True,
             plot_path=None,
-            inplace=False):
+            inplace=False,
+            dpi=200):
         '''
         Check replicate spread and optionally remove suspicious curves.
 
@@ -126,7 +127,7 @@ class ConsistencyProcessor:
             # inside this branch so normal analyses do not create figures.
             for label, group_data in suspicious_groups:
                 if plot_suspicious:
-                    figure, axis = plt.subplots(figsize=(4, 3), dpi=300)
+                    figure, axis = plt.subplots(figsize=(4, 3), dpi=dpi)
                     group_data[wavelength_columns].transpose().plot(
                         legend=legend, lw=.5, ax=axis)
                     label_text = label if len(group_keys) > 1 else str(label)

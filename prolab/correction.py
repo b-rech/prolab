@@ -31,7 +31,8 @@ class BreakMethods:
                      break_width=(1, 1),
                      edge_width=2,
                      correct_775_785=True,
-                     inline=False):
+                     inline=False,
+                     dpi=200):
         '''
         Correct spectral breaks and return a new Spectra object.
 
@@ -55,6 +56,8 @@ class BreakMethods:
         inline : bool, optional
             Display plots inline, such as in a Jupyter notebook, instead of
             opening blocking matplotlib windows. The default is ``False``.
+        dpi : int, optional
+            Dots per inch for the generated figures. The default is ``200``.
         '''
 
         plt = self._get_pyplot(inline)
@@ -102,7 +105,7 @@ class BreakMethods:
             if correct_775_785:
                 self._interpolate_gap(spectrum, (774, 786), (776, 784))
 
-            figure, axis = plt.subplots(figsize=(5.75, 5.75 / 2), dpi=300)
+            figure, axis = plt.subplots(figsize=(5.75, 5.75 / 2), dpi=dpi)
             axis.plot(original_spectrum.index.to_numpy(),
                       original_spectrum.to_numpy(),
                       lw=.5, color='red', label='Original')
